@@ -483,6 +483,7 @@ def extract_defender(local: str, sha: str, output_path: str, encoding: str):
         file_data = fh.read()
         out_file = output_path.joinpath("{0}_Defender.out".format(sha))
         # Get metadata like file names, registry keys, and task schedule
+        # TODO - Get metadata from header and footer, which may include file names and source URLs
         if file_data.startswith(b"\xDB\xE8\xC5\x01"):
             rc4 = ARC4.new(key=rc4_key)
             header = rc4.decrypt(file_data[:header_len])

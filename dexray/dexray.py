@@ -1,14 +1,13 @@
-
 import json
 
 from assemblyline.common.str_utils import safe_str
 from assemblyline_v4_service.common.base import ServiceBase
-
 from assemblyline_v4_service.common.request import ServiceRequest
 from assemblyline_v4_service.common.result import Result, ResultSection, BODY_FORMAT
 from assemblyline_v4_service.common.task import MaxExtractedExceeded
 
-from .dexray_lib import extract_ahnlab, extract_avast_avg, extract_mcafee_bup, extract_defender
+from dexray_lib import extract_ahnlab, extract_avast_avg, extract_mcafee_bup, extract_defender
+
 
 class Dexray(ServiceBase):
     def __init__(self, config=None):
@@ -45,7 +44,7 @@ class Dexray(ServiceBase):
         if metadata:
             # Can contain live URLs to the original content source
             kv_section = ResultSection("DeXRAY Quarantine Metadata",
-                                       body_format=BODY_FORMAT.JSON,
+                                       body_format=BODY_FORMAT.KEY_VALUE,
                                        body=json.dumps(metadata))
             result.add_section(kv_section)
 
