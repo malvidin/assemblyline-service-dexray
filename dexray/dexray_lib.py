@@ -10,13 +10,14 @@ import struct
 import re
 from datetime import datetime, timedelta, timezone
 from itertools import cycle
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
+from typing import Tuple
 
 import olefile
 from Crypto.Cipher import ARC4
 
 
-def extract_ahnlab(local: str, sha: str, output_path: str, encoding: str):
+def extract_ahnlab(local: str, sha: str, output_path: str, encoding: str) -> Tuple[list, dict]:
     """Will attempt to decrypt AhnLab quarantined file.
 
     Args:
@@ -54,7 +55,7 @@ def extract_ahnlab(local: str, sha: str, output_path: str, encoding: str):
     return [decrypted_file], metadata
 
 
-def extract_avast_avg(local: str, sha: str, output_path: str, encoding: str):
+def extract_avast_avg(local: str, sha: str, output_path: str, encoding: str) -> Tuple[list, dict]:
     """Will attempt to decrypt Avast quarantined file.
 
     Args:
@@ -382,7 +383,7 @@ def extract_avast_avg(local: str, sha: str, output_path: str, encoding: str):
     return [decrypted_files], metadata
 
 
-def extract_mcafee_bup(local: str, sha: str, output_path: str, encoding: str):
+def extract_mcafee_bup(local: str, sha: str, output_path: str, encoding: str) -> Tuple[list, dict]:
     """Will attempt to decrypt McAfee quarantined file.
 
     Args:
@@ -422,25 +423,35 @@ def extract_mcafee_bup(local: str, sha: str, output_path: str, encoding: str):
             tzinfo=timezone(timedelta(minutes=details.getint("Details", "TimeZoneOffset", fallback=0))),
         ).isoformat()
         for f in file_sections:
+            if not ole.exists(f):
+                continue
             if "Files" not in metadata:
                 metadata["Files"] = []
-            original_file_name = Path(details.get(f, "OriginalName", fallback="Unknown")).name
-            file_name = original_file_name
+            original_file = details.get(f, "OriginalName", fallback="Unknown")
+            if '\\' in original_file:
+                file_name = PureWindowsPath(original_file).name
+            else:
+                file_name = Path(original_file).name
+
+            metadata["Files"].append(original_file)
+
+            # Handle duplicate filenames
             i = 0
             while output_path.joinpath(file_name).is_file():
                 i += 1
-                file_name = "{0}.{1}.{2}".format(Path(original_file_name).stem, i, Path(original_file_name).suffix)
+                file_name = "{0}.{1}.{2}".format(Path(original_file).stem, i, Path(original_file).suffix)
 
             file_path = output_path.joinpath(file_name)
-            with open(file_path, "wb") as fo:
-                fo.write(bytes(b ^ 0x6a for b in ole.openstream(f).read()))
+            if ole.exists(f):
+                with open(file_path, "wb") as fo:
+                    fo.write(bytes(b ^ 0x6a for b in ole.openstream(f).read()))
 
-            decrypted_files.append([file_path, original_file_name, encoding])
+            decrypted_files.append([file_path, original_file, encoding])
 
     return decrypted_files, metadata
 
 
-def extract_defender(local: str, sha: str, output_path: str, encoding: str):
+def extract_defender(local: str, sha: str, output_path: str, encoding: str) -> Tuple[list, dict]:
     """Will attempt to decrypt Microsoft Defender quarantined files.
 
     Args:
@@ -455,8 +466,7 @@ def extract_defender(local: str, sha: str, output_path: str, encoding: str):
     """
     decrypted_files = []
     metadata = {}
-
-    if encoding == "windowsdefender":
+    if encoding in ("windowsdefender", "unknown"):
         output_path = Path(output_path)
         output_path.mkdir(exist_ok=True)
     else:
@@ -484,12 +494,14 @@ def extract_defender(local: str, sha: str, output_path: str, encoding: str):
         out_file = output_path.joinpath("{0}_Defender.out".format(sha))
         # Get metadata like file names, registry keys, and task schedule
         # TODO - Get metadata from header and footer, which may include file names and source URLs
-        if file_data.startswith(b"\xDB\xE8\xC5\x01"):
+        if file_data.startswith(b"\xD3\x45\xC5\x99"):
             rc4 = ARC4.new(key=rc4_key)
             header = rc4.decrypt(file_data[:header_len])
+            if not header.startswith(b"\xDB\xE8\xC5\x01"):
+                return decrypted_files, metadata
+
             data_end_1 = struct.unpack("<I", header[0x28:0x2C])[0] + header_len
             data_end_2 = struct.unpack("<I", header[0x2C:0x30])[0] + data_end_1
-
             rc4 = ARC4.new(key=rc4_key)
             decrypt_1 = rc4.decrypt(file_data[header_len:data_end_1])
             detection_name = decrypt_1[0x34:].rstrip(b"\x00").decode("utf-8")

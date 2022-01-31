@@ -1,4 +1,5 @@
 import json
+from typing import Tuple
 
 from assemblyline.common.str_utils import safe_str
 from assemblyline_v4_service.common.base import ServiceBase
@@ -6,7 +7,7 @@ from assemblyline_v4_service.common.request import ServiceRequest
 from assemblyline_v4_service.common.result import Result, ResultSection, BODY_FORMAT
 from assemblyline_v4_service.common.task import MaxExtractedExceeded
 
-from dexray_lib import extract_ahnlab, extract_avast_avg, extract_mcafee_bup, extract_defender
+from dexray.dexray_lib import extract_ahnlab, extract_avast_avg, extract_mcafee_bup, extract_defender
 
 
 class Dexray(ServiceBase):
@@ -23,14 +24,11 @@ class Dexray(ServiceBase):
     def start(self):
         self.log.info(f"start() from {self.service_attributes.name} service called")
 
-    def execute(self, request):
+    def execute(self, request: ServiceRequest):
         """Main Module. See README for details."""
         result = Result()
         self.sha = request.sha256
         local = request.file_path
-
-        text_section = None
-        kv_section = None
 
         extracted, metadata = self.dexray(request, local)
 
@@ -40,6 +38,7 @@ class Dexray(ServiceBase):
             for extracted in request.extracted:
                 file_name = extracted.get('name')
                 text_section.add_line(f"Resubmitted un-quarantined file as : {file_name}")
+            result.add_section(text_section)
 
         if metadata:
             # Can contain live URLs to the original content source
@@ -48,11 +47,9 @@ class Dexray(ServiceBase):
                                        body=json.dumps(metadata))
             result.add_section(kv_section)
 
-        for section in (text_section, kv_section):
-            if section:
-                result.add_section(section)
+        request.result = result
 
-    def dexray(self, request: ServiceRequest, local: str):
+    def dexray(self, request: ServiceRequest, local: str) -> Tuple[list, dict]:
         """Iterate through quarantine decrypt methods.
         Args:
             request: AL request object.
@@ -67,8 +64,10 @@ class Dexray(ServiceBase):
         # Try all extracting methods
         for extract_method in self.extract_methods:
             # noinspection PyArgumentList
+            self.log.debug('Attempting extract with %s' % extract_method.__name__)
             extracted, metadata = extract_method(local, self.sha, self.working_directory, encoding)
             if extracted or metadata:
+                self.log.info('Successfully extracted file or metadata with %s' % extract_method.__name__)
                 break
 
         extracted_count = len(extracted)
@@ -84,4 +83,4 @@ class Dexray(ServiceBase):
                                            f"maximum of {request.max_extracted} extracted files allowed. "
                                            "None of the files were extracted.")
 
-        return metadata
+        return extracted, metadata

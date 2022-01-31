@@ -2,7 +2,7 @@ name: Dexray
 version: $SERVICE_TAG
 description: >
   Quarantined file extractor
-accepts: quarantine/.*
+accepts: unknown|quarantine/.*
 rejects: empty|metadata/.*
 
 stage: EXTRACT
@@ -18,6 +18,6 @@ enabled: true
 is_external: false
 
 docker_config:
-  image: ewifly/assemblyline-service-dexray:$SERVICE_TAG
-  cpu_cores: 1.0
+  image: ${PRIVATE_REGISTRY}/assemblyline-service-dexray:$SERVICE_TAG
+  cpu_cores: 1
   ram_mb: 512
