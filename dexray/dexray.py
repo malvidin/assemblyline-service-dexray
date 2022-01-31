@@ -36,7 +36,7 @@ class Dexray(ServiceBase):
         if num_extracted != 0:
             text_section = ResultSection("DeXRAY found files:")
             for extracted in request.extracted:
-                file_name = extracted.get('name')
+                file_name = extracted.get("name")
                 text_section.add_line(f"Resubmitted un-quarantined file as : {file_name}")
             result.add_section(text_section)
 
@@ -64,10 +64,10 @@ class Dexray(ServiceBase):
         # Try all extracting methods
         for extract_method in self.extract_methods:
             # noinspection PyArgumentList
-            self.log.debug('Attempting extract with %s' % extract_method.__name__)
+            self.log.debug("Attempting extract with %s" % extract_method.__name__)
             extracted, metadata = extract_method(local, self.sha, self.working_directory, encoding)
             if extracted or metadata:
-                self.log.info('Successfully extracted file or metadata with %s' % extract_method.__name__)
+                self.log.info("Successfully extracted file or metadata with %s" % extract_method.__name__)
                 break
 
         extracted_count = len(extracted)

@@ -6,6 +6,7 @@
 # Partial Python 3 port by @malvidin
 
 import configparser
+import re
 import struct
 import re
 from datetime import datetime, timedelta, timezone
@@ -24,7 +25,7 @@ def extract_ahnlab(local: str, sha: str, output_path: str, encoding: str) -> Tup
         local: File path of AL sample.
         sha: SHA256 hash of input file
         output_path: Output directory for decrypted file(s)
-        encoding: AL tag with string 'quarantine/' replaced.
+        encoding: AL tag with string "quarantine/" replaced.
 
     Returns:
         List containing decoded file path, encoding, and original display name, or a blank list if
@@ -62,7 +63,7 @@ def extract_avast_avg(local: str, sha: str, output_path: str, encoding: str) -> 
         local: File path of AL sample.
         sha: SHA256 hash of input file
         output_path: Output directory for decrypted file(s)
-        encoding: AL tag with string 'quarantine/' replaced.
+        encoding: AL tag with string "quarantine/" replaced.
 
     Returns:
         List containing decoded file path, encoding, and original display name, or a blank list if
@@ -390,7 +391,7 @@ def extract_mcafee_bup(local: str, sha: str, output_path: str, encoding: str) ->
         local: File path of AL sample.
         sha: SHA256 hash of input file
         output_path: Output directory for decrypted file(s)
-        encoding: AL tag with string 'quarantine/' replaced.
+        encoding: AL tag with string "quarantine/" replaced.
 
     Returns:
         List containing decoded file path, encoding, and original display name, or a blank list if
@@ -428,7 +429,7 @@ def extract_mcafee_bup(local: str, sha: str, output_path: str, encoding: str) ->
             if "Files" not in metadata:
                 metadata["Files"] = []
             original_file = details.get(f, "OriginalName", fallback="Unknown")
-            if '\\' in original_file:
+            if "\\" in original_file:
                 file_name = PureWindowsPath(original_file).name
             else:
                 file_name = Path(original_file).name
@@ -458,7 +459,7 @@ def extract_defender(local: str, sha: str, output_path: str, encoding: str) -> T
         local: File path of AL sample.
         sha: SHA256 hash of input file
         output_path: Output directory for decrypted file(s)
-        encoding: AL tag with string 'quarantine/' replaced.
+        encoding: AL tag with string "quarantine/" replaced.
 
     Returns:
         List containing decoded file path, encoding, and original display name, or a blank list if
@@ -508,9 +509,38 @@ def extract_defender(local: str, sha: str, output_path: str, encoding: str) -> T
             if detection_name:
                 metadata["detection"] = detection_name
 
+            # TODO - Validate "Detection" is correct
+            detection_name = decrypt_1[0x34:].rstrip(b"\x00").decode("utf-8", "ignore")
+            if detection_name:
+                metadata["detection"] = detection_name
+
             rc4 = ARC4.new(key=rc4_key)
             decrypt_2 = rc4.decrypt(file_data[data_end_1:data_end_2])
 
+            m = None
+            for m in re.finditer(rb"(?P<ucs2_val>.*?)(?P<data_type>[a-z]{4,})\x00+(?:\x14|$)", decrypt_2):
+                data_type = m.group("data_type").rstrip(b"\x00").decode("ascii")
+                if data_type not in metadata:
+                    metadata[data_type] = []
+                ucs2_val = m.group("ucs2_val")
+                metadata[data_type].extend(
+                    re.findall(r"((?:HK[A-Za-z]+\\|[A-Za-z]:)[^\x00]+)",
+                               ucs2_val.decode("utf-16-le", errors="ignore"))
+                )
+                metadata[data_type].extend(
+                    re.findall(r"((?:HK[A-Za-z]+\\|[A-Za-z]:)[^\x00]+)",
+                               (b"\x00" + ucs2_val).decode("utf-16-le", errors="ignore"))
+                )
+
+            if m is None:
+                metadata["string_search"] = re.findall(r"([A-Za-z0-9:/\\]{3}[^\x00]+)",
+                                                       decrypt_2.decode("utf-16-le", errors="ignore"))
+                metadata["string_search"].extend(
+                    re.findall(r"([A-Za-z0-9:/\\]{3}[^\x00]+)",
+                               (b"\x00" + decrypt_2).decode("utf-16-le", errors="ignore"))
+                )
+
+            # TODO - Label and clean up string extractions
             m = None
             for m in re.finditer(rb"(?P<ucs2_val>.*?)(?P<data_type>[a-z]{4,})\x00+(?:\x14|$)", decrypt_2):
                 data_type = m.group("data_type").rstrip(b"\x00").decode("ascii")
