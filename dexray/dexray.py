@@ -7,7 +7,8 @@ from assemblyline_v4_service.common.request import ServiceRequest
 from assemblyline_v4_service.common.result import Result, ResultSection, BODY_FORMAT
 from assemblyline_v4_service.common.task import MaxExtractedExceeded
 
-from dexray.dexray_lib import extract_ahnlab, extract_avast_avg, extract_mcafee_bup, extract_defender
+from dexray.dexray_lib import extract_ahnlab, extract_avast_avg, extract_mcafee_bup, \
+    extract_defender, extract_trendmicro
 
 
 class Dexray(ServiceBase):
@@ -18,6 +19,7 @@ class Dexray(ServiceBase):
             extract_avast_avg,
             extract_mcafee_bup,
             extract_defender,
+            extract_trendmicro
         ]
         self.sha = None
 

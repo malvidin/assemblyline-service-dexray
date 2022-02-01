@@ -9,6 +9,7 @@ import configparser
 import re
 import struct
 import re
+import zlib
 from datetime import datetime, timedelta, timezone
 from itertools import cycle
 from pathlib import Path, PureWindowsPath
@@ -16,6 +17,7 @@ from typing import Tuple
 
 import olefile
 from Crypto.Cipher import ARC4
+from assemblyline.common.str_utils import safe_str
 
 
 def extract_ahnlab(local: str, sha: str, output_path: str, encoding: str) -> Tuple[list, dict]:
@@ -45,7 +47,7 @@ def extract_ahnlab(local: str, sha: str, output_path: str, encoding: str) -> Tup
         file_data = fh.read()
         if not file_data.startswith(b"AhnLab Inc. 2006"):
             return decrypted_files, metadata
-        data_offset = struct.unpack("I", file_data[0x58:0x5C])
+        data_offset, *_ = struct.unpack("I", file_data[0x58:0x5C])
         # TODO - Determine if any metadata is available in this quarantine format
         data = file_data[data_offset:]
         decrypted_data = bytes(d ^ k for (d, k) in zip(data, cycle(key)))
@@ -567,6 +569,7 @@ def extract_defender(local: str, sha: str, output_path: str, encoding: str) -> T
             decrypted_data = header + decrypt_1 + decrypt_2
             with open(out_file, "wb") as oh:
                 oh.write(decrypted_data)
+            decrypted_file = [str(out_file), out_file.name, encoding]
 
         elif file_data.startswith(b"\x0B\xAD"):
             rc4 = ARC4.new(key=rc4_key)
@@ -596,9 +599,147 @@ def extract_defender(local: str, sha: str, output_path: str, encoding: str) -> T
                     metadata.update(details._sections)
             with open(out_file, "wb") as oh:
                 oh.write(decrypted_data)
+            decrypted_file = [str(out_file), out_file.name, encoding]
 
         else:
             return decrypted_files, metadata
 
     decrypted_files = [str(out_file), out_file.name, encoding]
     return [decrypted_files], metadata
+
+
+def get_trendmicro_metadata(data: bytes, metadata:dict, offset: int = 4) -> int:
+    """Extracts TrendMicro metadata from VSBX file
+
+    Args:
+         data: decrypted VSBX file
+         offset: Offset to start
+         metadata: dict of metadata
+
+    Returns:
+         Offset in data after metadata is extracted
+    """
+    tag_lut = {1: 'original_path', 2: 'original_file_name',
+               3: 'platform', 4: 'attributes',
+               6: 'base_key', 7: 'encoding'}
+
+    data_offset, *_ = struct.unpack("I", data[offset:offset+4])
+    data_tag_count, *_ = struct.unpack("H", data[offset+4:offset+6])
+    offset += 6  # Header complete
+    data_offset += offset
+
+    metadata['data_offset'] = data_offset
+    metadata['data_tag_count'] = data_tag_count
+
+    for i in range(data_tag_count):
+        tag_type, *_ = struct.unpack("B", data[offset:offset + 1])
+        tag_len, *_ = struct.unpack("H", data[offset + 1:offset + 3])
+        offset += 3
+        tag = data[offset:offset + tag_len]
+        offset += tag_len
+
+        tag_name = tag_lut.get(tag_type, f'unknown(0x{tag_type:02X})')
+
+        if tag_type in (1, 2):
+            # UTF16 Text Values
+            tag_val = tag.decode('utf-16le', 'ignore').rstrip('\x00')
+        elif tag_type == 4:
+            # Original File Attributes (?)
+            attr, *_ = struct.unpack("I", tag[:4])
+            attr_hex = f'0x{attr:04X}'
+            attr_str = ''
+            attr_dict = {0x2000: "I", 0x0020: "A", 0x04: "S", 0x02: "H", 0x01: "R"}
+            for mask, a in attr_dict.items():
+                if attr & mask:
+                    attr_str += a
+            if attr & 0xDFD8:  # 0xFFFF - sum(attr_dict.keys())
+                attr_str += f', unknown flags set: 0x{attr & 0xDFD8:04X}'
+            tag_val = f'{attr_hex} ({attr_str})'
+        elif tag_type == 6:
+            # For CRC encoded data, get the seed-like value
+            base_key, *_ = struct.unpack("I", tag[:4])
+            tag_val = f'0x{base_key:08X}'
+        elif tag_type == 7:
+            # Type of encoding, known are XOR (done beforehand) or CRC32
+            enc, *_ = struct.unpack("I", tag[:4])
+            if enc == 1:
+                tag_val = 'XOR 0xFF'
+            elif enc == 2:
+                tag_val = 'CRC'
+            else:
+                tag_val = f'unknown encoding: 0x{enc:08X}'
+        else:
+            # Unknown values
+            tag_val = repr(tag)
+
+        metadata[tag_name] = safe_str(tag_val)  # Overwrite if duplicated
+
+    # if data_offset != offset: "Unexpected offset, as the header data_offset"
+    return offset
+
+
+def extract_trendmicro(local: str, sha: str, output_path: str, encoding: str) -> Tuple[list, dict]:
+    """Will attempt to decrypt TrendMicro quarantined file.
+
+    Args:
+        local: File path of AL sample.
+        sha: SHA256 hash of input file
+        output_path: Output directory for decrypted file(s)
+        encoding: AL tag with string "quarantine/" replaced.
+
+    Returns:
+        List containing decoded file path, encoding, and original display name, or a blank list if
+        decryption failed; and any related metadata from the quarantine file.
+    """
+    decrypted_files = []
+    metadata = {}
+
+    if encoding in ("trendmicro", "unknown"):
+        output_path = Path(output_path)
+        output_path.mkdir(exist_ok=True)
+    else:
+        return decrypted_files, metadata
+
+    with open(local, "rb") as fh:
+        xor_data = fh.read()
+        if not xor_data.startswith(b"\xA9\xAC\xBD\xA7") or len(xor_data) <= 10:
+            return decrypted_files, metadata
+        offset = 4
+        data = bytes(d ^ 0xFF for d in xor_data)
+
+    out_file_vsbx = output_path.joinpath("{0}_TrendMicro_VSBX.out".format(sha))
+    with open(out_file_vsbx, "wb") as oh:
+        oh.write(data)
+    decrypted_files.append([str(out_file_vsbx), out_file_vsbx.name, encoding])
+
+    offset = get_trendmicro_metadata(data, metadata, offset=offset)
+
+    out_file = output_path.joinpath("{0}_TrendMicro.out".format(sha))
+    enc = metadata.get('encoding', '')
+    base_key = metadata.get('base_key')
+
+    if 'xor' in enc.lower():
+        with open(out_file, "wb") as oh:
+            oh.write(data[offset:])
+        decrypted_file = [str(out_file), out_file.name, encoding]
+
+    elif 'crc' in enc.lower() and base_key:
+        unaligned = offset % 4
+        crc_decrypt_data = bytearray()
+        base_key = int(base_key, 16)
+
+        if unaligned:
+            crc_buff = struct.pack("I", zlib.crc32(struct.pack("I", base_key + offset - unaligned)))[unaligned:]
+            crc_decrypt_data.extend([b ^ c for (b, c) in zip(data[offset:offset + 4 - unaligned], crc_buff, )])
+            offset += 4 - unaligned
+
+        for o in range(offset, len(data), 4):
+            crc_buff = struct.pack("I", zlib.crc32(struct.pack("I", base_key + o)))
+            crc_decrypt_data.extend([b ^ c for (b, c) in zip(data[o:o + 4], crc_buff, )])
+
+        out_file = output_path.joinpath("{0}_TrendMicro.out".format(sha))
+        with open(out_file, "wb") as oh:
+            oh.write(crc_decrypt_data)
+        decrypted_files.append([str(out_file), out_file.name, encoding])
+
+    return decrypted_files, metadata
